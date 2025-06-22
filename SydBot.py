@@ -1,20 +1,12 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Simulando uma base de dados de alunos. A chave principal é o ID de matrícula do aluno.
-banco_de_dados_alunos = {
-    "202203708007": {"nome": "Jefferson Damião da Silva Lima", "presente": True, "chat_id": None},
-    "202203442295": {"nome": "vitor melo", "presente": False, "chat_id": None}, # Exemplo com chat_id
-    "202203424467": {"nome": "vitor mota", "presente": False, "chat_id": None},
-    "202108462012": {"nome": "anne victoria", "presente": False, "chat_id": None}
-}
-
-#-----------------------------------------------------------------
-CHAVE_API = "------------------------------"
+#-------------TIRA A CHAVE ANTES DE COMMITAR PELO AMOR-----------
+CHAVE_API = "---------------------------------"
 bot = telebot.TeleBot(CHAVE_API)
 #-----------------------------------------------------------------
 
-def gerar_teclado_justificativas():
+def gerar_teclado_justificativas(matricula_aluno):
     """
     Cria e retorna um teclado inline com as opções de justificativa de falta.
     """
@@ -28,10 +20,10 @@ def gerar_teclado_justificativas():
     # O 'text' é o que o usuário vê.
     # O 'callback_data' é a informação que o bot recebe quando o botão é clicado.
     # Use um padrão para o callback_data, como 'just_NOMEDOBOTAO'
-    btn_medico = InlineKeyboardButton("🩺 Atestado Médico", callback_data="just_medico")
-    btn_pessoal = InlineKeyboardButton("👤 Problema Pessoal", callback_data="just_pessoal")
-    btn_transporte = InlineKeyboardButton("🚌 Transporte", callback_data="just_transporte")
-    btn_outro = InlineKeyboardButton("✏️ Outro", callback_data="just_outro")
+    btn_medico = InlineKeyboardButton("🩺 Atestado Médico", callback_data=f"just_medico:{matricula_aluno}")
+    btn_pessoal = InlineKeyboardButton("👤 Problema Pessoal", callback_data=f"just_pessoal:{matricula_aluno}")
+    btn_transporte = InlineKeyboardButton("🚌 Transporte", callback_data=f"just_transporte:{matricula_aluno}")
+    btn_outro = InlineKeyboardButton("✏️ Outro", callback_data=f"just_outro:{matricula_aluno}")
 
     # 4. Adiciona os botões ao teclado
     markup.add(btn_medico, btn_pessoal, btn_transporte, btn_outro)
@@ -72,16 +64,13 @@ def verificar_faltas_e_notificar():
             try:
                 texto_notificacao = f"Olá, {nome_aluno}. Notamos que você não registrou presença na aula de hoje. Poderia nos informar o motivo?"
 
-                # Envia a mensagem para o aluno
-                bot.send_message(chat_id_aluno, texto_notificacao)
-
-                print(f"Notificação de falta enviada para {nome_aluno} (Matrícula: {matricula})")
+                # Agora, passamos o teclado como um parâmetro 'reply_markup'.
+                bot.send_message(chat_id_aluno, texto_notificacao, reply_markup=gerar_teclado_justificativas(matricula))# Passando a matrícula atual do loop
+                print(f"Notificação de falta com botões enviada para {nome_aluno} (Matrícula: {matricula})")
+                #alunos_notificados += 1
 
             except Exception as e:
-                # O 'Exception as e' captura qualquer erro que possa ocorrer.
-                # Por exemplo, se o aluno bloqueou o bot, o send_message vai falhar.
-                print(f"Falha ao enviar mensagem para {nome_aluno}. Erro: {e}")
-
+                print(f"Falha ao enviar mensagem para {nome_aluno} (Matrícula: {matricula}). Erro: {e}")
 
 # Handler para o comando /registrar
 @bot.message_handler(commands=["registrar"])
@@ -107,7 +96,54 @@ def registrar_aluno(mensagem):
         bot.send_message(chat_id, "Formato inválido. Use: /registrar [SUA_MATRICULA]")
 
 
+@bot.callback_query_handler(func=lambda call: True)
+def processar_justificativa(call):
+    """
+    Processa o clique no botão. Agora, extrai a ação e a matrícula
+    diretamente do `call.data`.
+    """
+    # 1. Extrai a ação e a matrícula do callback_data (ex: "just_pessoal:2024002")
+    acao, matricula = call.data.split(':')
 
+    # 2. Busca o nome do aluno no banco de dados usando a matrícula (MUITO MAIS SEGURO!)
+    try:
+        nome_aluno = banco_de_dados_alunos[matricula]['nome']
+    except KeyError:
+        # Medida de segurança caso a matrícula não seja encontrada
+        bot.send_message(call.message.chat.id, "Ocorreu um erro ao processar sua matrícula. Contate o suporte.")
+        print(f"ERRO: Matrícula {matricula} não encontrada no banco de dados ao processar callback.")
+        return  # Para a execução da função aqui
+
+    # 3. Log no console com a informação correta
+    print(f"O aluno {nome_aluno} (matrícula {matricula}) justificou a falta com o motivo: {acao}")
+
+    # 4. Define a resposta para o aluno
+    if acao == "just_medico":
+        resposta_texto = "Entendido. Sua falta foi pré-justificada como 'Atestado Médico'. Por favor, não se esqueça de entregar o documento na secretaria."
+    elif acao == "just_pessoal":
+        resposta_texto = "Recebido. Sua resposta foi registrada como 'Problema Pessoal'."
+    elif acao == "just_transporte":
+        resposta_texto = "Ok, entendemos. Registramos a justificativa como 'Problema com Transporte'."
+    else:  # just_outro
+        resposta_texto = "Entendido. Se necessário, por favor, entre em contato com a coordenação para detalhar o motivo."
+
+    # 5. Edita a mensagem original para remover os botões
+    motivo_formatado = acao.replace('just_', '').replace('_', ' ').capitalize()
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"{call.message.text}\n\n*✅ Resposta registrada: {motivo_formatado}*",
+        reply_markup=None,
+        parse_mode="Markdown"
+    )
+
+    # 6. Envia uma nova mensagem de confirmação
+    bot.send_message(call.message.chat.id, resposta_texto)
+
+    # 7. Confirma o callback para o Telegram
+    bot.answer_callback_query(call.id, "Resposta registrada!")
+
+#_____ADMIM SIDE_____
 @bot.message_handler(commands=["verificarfaltas"])
 def comando_verificar_faltas(mensagem):
     """
